@@ -1,0 +1,30 @@
+----- "Futexes are Tricky" in CSP
+
+-- Spec of userland PROCs behaviour
+channel lock, unlock:{1..PROC_MAX}
+SPROC(i) = lock.i -> unlock.i -> SPROC(i)
+SPROCS = || i:{1..PROC_MAX} @ [{|lock.i, unlock.i|}] SPROC(i)
+SLOCK = lock?v -> unlock.v -> SLOCK
+SALPHA = {|lock, unlock|}
+SPEC = (SPROCS [|SALPHA|] SLOCK)
+
+-- Futex which wakes only one userland PROC in FIFO order for the sake of simplicity
+-- futex val overflow. if you would set it large enough for reality,
+-- refinement process gets heavier.
+INC_MAX=5
+PROC_MAX=3
+channel futexwake
+channel futexwait:{1..PROC_MAX}.{0..INC_MAX}
+channel futexwait_return:{1..PROC_MAX}.{true, false}
+channel wake:{1..PROC_MAX}
+channel kread:{0..INC_MAX}
+FUTEX(w) = futexwait?p?v -> kread?x -> (
+               v==x & futexwait_return!p!true -> (
+                   if elem(p, w) then FUTEX(w)
+                   else FUTEX(concat(<w, <p>>)))
+               [] v!=x & futexwait_return!p.false -> FUTEX(w))
+           [] futexwake -> FUTEX_WAKING(w)
+FUTEX_WAKING(w) = #w == 0 & FUTEX(<>)
+                  [] #w > 0 & ((wake.head(w) -> FUTEX(tail(w))) [> FUTEX_WAKING(tail(w)))
+FUTEX_ALPHA = {|futexwait, futexwake, futexwait_return, wake, kread|}
+transparent normal, sbisim, diamond

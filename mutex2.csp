@@ -1,0 +1,55 @@
+-- Mutex, Take #2
+include "base.csp"
+channel atomicdec, reset
+channel cmpxchg:{0..2}.{0..2}
+channel cmpxchg_return:{0..2}
+channel atomicdec_return:{0..2}
+VAL(v) = (cmpxchg?x?y -> cmpxchg_return!v -> (
+             if x==v then VAL(y) else VAL(v)))
+         []
+         (v>0 & atomicdec -> atomicdec_return!v -> VAL(v-1))
+         []
+         (kread!v -> VAL(v))
+         []
+         (reset -> VAL(0))
+VAL_ALPHA = {|cmpxchg, cmpxchg_return, atomicdec, atomicdec_return, reset, kread|}
+
+PROC(i) = cmpxchg!0!1 -> cmpxchg_return?c -> (
+              if c==0 then lock.i -> PROC_LOCKING(i)
+              else PROC_LOOP(i,c)
+          )
+PROC_LOOP(i,c) = if c==2 then futexwait.i.2 -> PROC_FUTEX_RETURN(i)
+                 else cmpxchg!1!2 -> cmpxchg_return?c -> (
+                     if c!=0 then futexwait.i.2 -> PROC_FUTEX_RETURN(i)
+                     else PROC_FINALLY_LOCK(i)
+                 )
+PROC_FUTEX_RETURN(i) = futexwait_return.i?ret -> (
+                           if ret==true then PROC_WAITING(i)
+                           else PROC_FINALLY_LOCK(i)
+                       )
+PROC_WAITING(i) = (wake.i -> PROC_FINALLY_LOCK(i)) [> PROC_FINALLY_LOCK(i)
+PROC_FINALLY_LOCK(i) = cmpxchg!0!2 -> cmpxchg_return?c -> (
+                           if c!= 0 then PROC_LOOP(i, c)
+                           else lock.i -> PROC_LOCKING(i)
+                       )
+PROC_LOCKING(i) = unlock.i -> atomicdec -> atomicdec_return?x -> (
+                      if x==1 then PROC(i)
+                      else reset -> futexwake -> PROC(i)
+                  )
+PROC_ALPHA = {|cmpxchg, cmpxchg_return,
+               futexwait, futexwait_return, futexwake, wake, 
+               atomicdec, atomicdec_return, reset, lock, unlock|}
+
+PROCS = ||| i:{1..PROC_MAX} @ PROC(i)
+ALL_ALPHA = Union({FUTEX_ALPHA, VAL_ALPHA, PROC_ALPHA})
+USERLAND_ALPHA = Union({PROC_ALPHA, VAL_ALPHA})
+USERLAND = (PROCS [PROC_ALPHA || VAL_ALPHA] VAL(0)) \diff(ALL_ALPHA, union(FUTEX_ALPHA, SALPHA))
+SYSTEM = sbisim(diamond((USERLAND [USERLAND_ALPHA || FUTEX_ALPHA] FUTEX(<>)) \diff(ALL_ALPHA, SALPHA)))
+
+assert SYSTEM :[livelock free]
+assert SYSTEM :[deadlock free]
+assert SYSTEM :[deadlock free [F]]
+assert SYSTEM :[deterministic]
+assert SYSTEM :[deterministic [F]]
+assert SYSTEM :[divergence-free]
+assert SPEC [T= SYSTEM

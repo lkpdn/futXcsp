@@ -1,0 +1,32 @@
+-- Mutex, Take #1
+include "base.csp"
+channel ainc, read:{0..INC_MAX}
+VAL(v) = (ainc!v -> (if v>=INC_MAX then STOP else VAL(v+1)))
+         [] (v>0 & futexwake -> VAL(0))
+         [] (read!v -> VAL(v))
+         [] (kread!v -> VAL(v))
+VAL_ALPHA = {|ainc, futexwake, read, kread|}
+
+PROC(i) = ainc?v -> (
+              if v==0 then lock.i -> PROC_LOCKING(i)
+              else read?x -> futexwait.i.x -> futexwait_return.i?ret -> (
+                  if ret==true then PROC_WAITING(i)
+                  else PROC(i)
+              ))
+PROC_WAITING(i) = (wake.i -> PROC(i)) [> PROC(i)
+PROC_LOCKING(i) = unlock.i -> futexwake -> PROC(i)
+PROC_ALPHA = {|ainc, read, futexwake, futexwait, futexwait_return, wake, lock, unlock|}
+
+PROCS = ||| i:{1..PROC_MAX} @ PROC(i)
+ALL_ALPHA = Union({FUTEX_ALPHA, VAL_ALPHA, PROC_ALPHA})
+USERLAND_ALPHA = Union({PROC_ALPHA, VAL_ALPHA})
+USERLAND = (PROCS [PROC_ALPHA || VAL_ALPHA] VAL(0)) \diff(ALL_ALPHA, union(FUTEX_ALPHA, SALPHA))
+SYSTEM = sbisim(diamond((USERLAND [USERLAND_ALPHA || FUTEX_ALPHA] FUTEX(<>)) \diff(ALL_ALPHA, SALPHA)))
+
+assert SYSTEM :[livelock free]
+assert SYSTEM :[deadlock free]
+assert SYSTEM :[deadlock free [F]]
+assert SYSTEM :[deterministic]
+assert SYSTEM :[deterministic [F]]
+assert SYSTEM :[divergence-free]
+assert SPEC [T= SYSTEM
