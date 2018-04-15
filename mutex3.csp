@@ -1,4 +1,4 @@
--- Mutex, Take #2
+-- Mutex, Take #3
 include "base.csp"
 channel atomicdec, reset
 channel cmpxchg:{0..2}.{0..2}
